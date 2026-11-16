@@ -1,4 +1,123 @@
 {% extends "base.html" %}{% block content %}
-<div class="grid module-6"><section class="panel panel--primary"><div class="panel__head"><h2>批次导出记录</h2><span class="panel__meta">M6 · {{ data.status|default('READY') }}</span></div><div class="panel__body panel__body--scroll"><table class="ledger"><thead><tr><th>字段</th><th>值</th><th>证据</th></tr></thead><tbody>{% for key, value in data.items() %}<tr><td>{{ key }}</td><td class="num">{{ value }}</td><td>R{{ loop.index }}</td></tr>{% endfor %}</tbody></table></div></section>
-<div class="stack"><section class="panel"><div class="panel__head"><h2>原因码</h2><span class="panel__meta">{{ data.reason|default('OK') }}</span></div><div class="panel__body bars"><i style="--v:74%"></i><i style="--v:47%"></i></div></section><section class="panel"><div class="panel__head"><h2>本次动作</h2><span class="panel__meta">/api/export/differences.csv</span></div><div class="panel__body"><button class="btn btn--primary" data-endpoint="/api/export/differences.csv">运行 批次导出</button><pre class="result">等待运行</pre></div></section></div></div>
+<div class="grid module-6">
+  <section class="panel panel--primary">
+    <div class="panel__head"><h2>批次与领取回执</h2><span class="panel__meta" id="batch-meta">M6 · {{ batch.batch_id if batch else '尚无批次' }}</span></div>
+    <div class="panel__body panel__body--scroll">
+      <div class="batch-toolbar">
+        <label class="field">批次
+          <select id="batch-select">
+            {% for item in batches %}
+            <option value="{{ item.batch_id }}" {% if batch and item.batch_id == batch.batch_id %}selected{% endif %}>{{ item.batch_id }} · 修订 {{ item.revision }} · {{ item.item_count }} 项</option>
+            {% endfor %}
+          </select>
+        </label>
+        <a class="btn" id="batch-export" href="#">导出 CSV</a>
+      </div>
+
+      {% if batch %}
+      <div class="kpis kpis--batch" id="batch-kpis">
+        <div class="kpi"><b>修订</b><span data-kpi="revision">{{ batch.revision }}</span></div>
+        <div class="kpi"><b>差异项</b><span data-kpi="item_count">{{ batch.item_count }}</span></div>
+        <div class="kpi"><b>已领取</b><span data-kpi="claimed">{{ batch.progress.claimed }}</span></div>
+        <div class="kpi"><b>已确认</b><span data-kpi="confirmed">{{ batch.progress.confirmed }}</span></div>
+        <div class="kpi"><b>冲正</b><span data-kpi="reversals">{{ batch.progress.reversals }}</span></div>
+      </div>
+
+      <h3 class="section-title">差异项与回执</h3>
+      <table class="ledger" id="batch-items">
+        <thead><tr><th>Key</th><th>状态</th><th>证据</th><th>代次</th><th>回执</th><th>处理状态</th></tr></thead>
+        <tbody>
+          {% for item in batch["items"] %}
+          <tr>
+            <td>{{ item.key }}</td>
+            <td>{{ item.status }}</td>
+            <td class="clip" title="{{ item.evidence }}">{{ item.evidence }}</td>
+            <td class="num">#{{ item.generation }}</td>
+            <td class="mono">{{ item.receipt.receipt_id if item.receipt else '—' }}</td>
+            <td><span class="tag tag--{{ item.receipt.state if item.receipt else 'unclaimed' }}">{{ item.receipt.state if item.receipt else '未领取' }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h3 class="section-title">历史凭据（已撤销 / 已替换）</h3>
+      <table class="ledger" id="batch-history">
+        <thead><tr><th>回执</th><th>Key</th><th>代次</th><th>状态</th><th>内容</th></tr></thead>
+        <tbody>
+          {% for row in batch.receipt_history %}
+          <tr><td class="mono">{{ row.receipt_id }}</td><td>{{ row.key }}</td><td class="num">#{{ row.generation }}</td><td><span class="tag tag--{{ row.state }}">{{ row.state }}</span></td><td class="clip" title="{{ row.evidence }}">{{ row.evidence }}</td></tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">暂无历史凭据</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h3 class="section-title">更正进度</h3>
+      <div class="progress">
+        <span>撤销 <b id="p-withdrawn">{{ batch.progress.withdrawn }}</b></span>
+        <span>替换 <b id="p-replaced">{{ batch.progress.replaced }}</b></span>
+        <span>冲正 <b id="p-reversals">{{ batch.progress.reversals }}</b></span>
+        <span>待续做 <b id="p-pending">{{ batch.progress.pending_corrections }}</b></span>
+      </div>
+
+      <table class="ledger" id="batch-reversals">
+        <thead><tr><th>冲正编号</th><th>回执</th><th>Key</th><th>原因</th><th>修订</th></tr></thead>
+        <tbody>
+          {% for reversal in batch.reversals %}
+          <tr><td class="mono">{{ reversal.reversal_id }}</td><td class="mono">{{ reversal.receipt_id }}</td><td>{{ reversal.key }}</td><td>{{ reversal.reason }}</td><td class="num">{{ reversal.revision }}</td></tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">暂无冲正</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h3 class="section-title">更正与事件轨迹</h3>
+      <table class="ledger" id="batch-events">
+        <thead><tr><th>#</th><th>类型</th><th>Key</th><th>凭据</th><th>修订</th></tr></thead>
+        <tbody>
+          {% for event in batch.events|reverse %}
+          <tr><td class="num">{{ event.seq }}</td><td>{{ event.type }}</td><td>{{ event.key or '—' }}</td><td class="mono">{{ event.receipt_id or event.reversal_id or '—' }}</td><td class="num">{{ event.revision }}</td></tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">暂无事件</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">还没有批次。先在下方创建，或从差异对账结果建档。</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <div class="stack">
+    <section class="panel">
+      <div class="panel__head"><h2>本次动作</h2><span class="panel__meta">/api/batches</span></div>
+      <div class="panel__body batch-actions">
+        <label class="field">操作人 <input id="worker" value="reviewer-1" autocomplete="off"></label>
+        <div class="row">
+          <button class="btn btn--primary" id="act-claim" {% if not batch %}disabled{% endif %}>领取差异</button>
+          <button class="btn" id="act-confirm" {% if not batch %}disabled{% endif %}>确认处理</button>
+          <button class="btn" id="act-refresh">刷新进度</button>
+        </div>
+        <label class="field">新清单（JSON 数组，key/status/evidence）
+          <textarea id="correct-items" rows="6" spellcheck="false" placeholder='[{"key":"a","status":"MISSING","evidence":"manifest"}]'></textarea>
+        </label>
+        <label class="field">更正原因 <input id="correct-reason" value="清单更正"></label>
+        <button class="btn btn--primary" id="act-correct" {% if not batch %}disabled{% endif %}>按领取回执更正</button>
+        <pre class="result" id="action-result">等待操作</pre>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2>新建批次</h2><span class="panel__meta">/api/batches</span></div>
+      <div class="panel__body batch-actions">
+        <label class="field">差异项（JSON 数组）
+          <textarea id="new-items" rows="5" spellcheck="false" placeholder='[{"key":"b","status":"MISSING","evidence":"manifest"}]'></textarea>
+        </label>
+        <button class="btn" id="act-create">创建批次</button>
+      </div>
+    </section>
+  </div>
+</div>
+<script id="batch-data" type="application/json">{{ (batch or {})|tojson }}</script>
+<script src="/static/batch.js"></script>
 {% endblock %}
